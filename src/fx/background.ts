@@ -5,6 +5,7 @@ import {
   exp,
   float,
   floor,
+  fract,
   hash,
   max,
   mix,
@@ -53,6 +54,14 @@ export function backgroundUniforms() {
     beat: uniform(0),
     /** Film grain, 0 to 1. Off while the intro is still plain black and white. */
     grain: uniform(1),
+    /** Double time: the halves cycle through a rainbow. */
+    frenzy: uniform(0),
+    /** Surge orb: position along the bar (0 to 1) and how visible it is. */
+    orb: uniform(new Vector2(0.5, 0)),
+    /** Menus: the halves sink back so the panels on top read cleanly. */
+    menu: uniform(0),
+    /** Your last press: where along the bar (0 to 1), seconds since, 1 for creators, streak heat. */
+    mine: uniform(new Vector4(0.5, 99, 1, 0)),
   }
 }
 
@@ -111,9 +120,14 @@ export function backgroundNode(u: BackgroundUniforms) {
     half.addAssign(blue.mul(u.pulseCreators.mul(isBlue).mul(nearBar).mul(0.35)))
     half.mulAssign(float(1).sub(u.pulseDestroyers.mul(isBlue.oneMinus()).mul(nearBar).mul(0.3)))
     half.mulAssign(u.beat.mul(0.08).add(1))
+    const rainbow = vec3(0, 0.33, 0.67).add(t.mul(0.9)).add(fx).add(p.y.mul(0.0015)).mul(6.2832).cos().mul(0.5).add(0.5)
+    half.assign(mix(half, rainbow, u.frenzy.mul(0.45)))
+
+    // In menus the halves dim toward the frame colour, keeping a hint of each team.
+    half.assign(mix(half, mix(dark, half, 0.38), u.menu))
 
     const seam = exp(abs(fx.sub(seamX)).mul(u.frame.z).div(u.chaos.mul(12).add(2)).negate())
-    half.addAssign(white.mul(seam.mul(u.chaos.mul(0.9).add(0.15))))
+    half.addAssign(white.mul(seam.mul(u.chaos.mul(0.9).add(0.15)).mul(u.menu.mul(-0.5).add(1))))
 
     // The bar: a white band with the pink fill running to the tip.
     const inBand = inside(p, u.bar)
@@ -125,12 +139,45 @@ export function backgroundNode(u: BackgroundUniforms) {
 
     const scene = mix(half, band, inBand).toVar()
 
+
     // The tip burns brightly enough to bloom.
     const tipGlow = exp(abs(p.x.sub(tipX)).div(u.chaos.mul(14).add(5)).negate()).mul(
       exp(max(abs(p.y.sub(barMid)).sub(track.w.mul(0.5)), 0).div(10).negate()),
     )
     scene.addAssign(vec3(1.4, 0.5, 0.8).mul(tipGlow).mul(u.pulseCreators.add(u.pulseDestroyers).mul(1.5).add(0.6)))
     scene.addAssign(white.mul(ring.mul(0.35)))
+
+    // Your presses. The bar is a hundred segments: the dividers around your
+    // last press show for a moment (wider on a streak), a notch in your
+    // team's colour marks where it landed, and a ripple runs out from it.
+    const inTrack = inside(p, track)
+    const segment = u.bar.z.div(100)
+    const toDivider = abs(fract(p.x.sub(u.bar.x).div(segment).add(0.5)).sub(0.5)).mul(segment)
+    const pressX = u.bar.x.add(u.bar.z.mul(u.mine.x))
+    const fromPress = abs(p.x.sub(pressX))
+    const fresh = exp(u.mine.y.mul(-2.5))
+    const nearPress = exp(fromPress.div(u.mine.w.mul(220).add(45)).pow(2).negate())
+    // Too fine to read on a narrow screen, so only where segments are wide enough.
+    const divider = smoothstep(1.5, 0.5, toDivider).mul(inTrack).mul(smoothstep(4, 7, segment))
+    scene.assign(mix(scene, scene.mul(0.6), divider.mul(nearPress).mul(fresh.mul(0.7).add(u.mine.w.mul(0.5)).min(1))))
+    const teamColor = mix(dark, blue, u.mine.z)
+    const nearBand = step(u.bar.y.sub(16), p.y).mul(step(p.y, u.bar.y.add(u.bar.w).add(16)))
+    const notch = smoothstep(4, 2, fromPress).mul(nearBand).mul(fresh)
+    scene.assign(mix(scene, teamColor, notch))
+    const ripple = exp(fromPress.sub(u.mine.y.mul(800)).div(16).pow(2).negate()).mul(exp(u.mine.y.mul(-6))).mul(inTrack)
+    scene.assign(mix(scene, teamColor.mul(1.5), ripple.mul(0.6)))
+
+    // The surge orb: a gold core with a halo that throbs.
+    const orbCenter = vec2(u.bar.x.add(u.bar.z.mul(u.orb.x)), barMid)
+    const orbDistance = p.sub(orbCenter).length()
+    const throb = sin(t.mul(9)).mul(0.5).add(0.5)
+    // A dark rim keeps it readable against the white band.
+    const orbRim = smoothstep(21, 19, orbDistance)
+    const orbCore = smoothstep(17, 15, orbDistance)
+    const orbHalo = exp(orbDistance.sub(18).max(0).div(throb.mul(10).add(10)).negate()).mul(orbRim.oneMinus())
+    scene.assign(mix(scene, dark, orbRim.mul(u.orb.y)))
+    scene.assign(mix(scene, vec3(1, 0.62, 0.05).mul(throb.mul(0.5).add(1)), orbCore.mul(u.orb.y)))
+    scene.addAssign(vec3(1, 0.6, 0.1).mul(orbHalo.mul(u.orb.y).mul(0.5)))
 
     const framed = mix(dark, scene, inFrame).toVar()
 
